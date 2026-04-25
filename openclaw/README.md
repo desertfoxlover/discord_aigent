@@ -144,6 +144,10 @@ docker compose --profile cli run --rm openclaw-cli models status
 
 - (알고만 두기) OpenClaw 쪽에서 임베드 폴백용 `main` 이야기는 [다중 에이전트 이슈](https://github.com/openclaw/openclaw/issues) 등에서 볼 수 있으나, **잘 맞는 해법이 아닐 수 있으면 쓰지 말고** 본질(게이트웨이 정상)을 고친다. `openclaw agents list` 로 등록 id를 확인한다.
 
+- **`unknown agent id "discord-gemini"`(또는 claude):** 게이트웨이가 **마운트한** `openclaw.json`에 `agents.list[].id`가 없을 때다. `OPENCLAW_CONFIG_DIR`이 PC에서 기대한 폴더(`data/config`)인지, 그 안 `openclaw.json`에 `discord-gemini` / `discord-claude`가 있는지 확인한 뒤 **`docker compose restart openclaw-gateway`**. (저장소의 `data/config/openclaw.json.example` 참고)
+
+- **Google 429 / `exceeded your current quota`:** [Google AI/Cloud 콘솔](https://ai.google.dev/)에서 **할당량·결제(Quota & billing)**. Anthropic 쪽 `billing issue` 는 Anthropic 콘솔/크레딧. **브릿지 코드 문제가 아니라 키·쿼터**다.
+
 ---
 
 ## 공식 링크

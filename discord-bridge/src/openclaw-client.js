@@ -11,6 +11,44 @@ const OPENCLAW_ENTRY = "/app/openclaw.mjs";
 const MAX_IO_BYTES = 50 * 1024 * 1024;
 
 /**
+ * CLI stderr/stdout 이 수만 자일 수 있어 Discord 2000자·50035 를 유발 — 짧은 사용자 메시지로 압축
+ * @param {string} combined
+ * @param {number | null} code
+ * @param {string} hint
+ */
+function compactOpenClawCliErrorMessage(combined, code, hint) {
+  const low = combined.toLowerCase();
+  const unknown = combined.match(/unknown agent id "([^"]+)"/i);
+  if (unknown) {
+    return (
+      `게이트웨이에 없는 에이전트 id: "${unknown[1]}". ` +
+      "`openclaw.json`의 `agents.list`에 이 id가 있고 `OPENCLAW_CONFIG_DIR`이 게이트웨이에 마운트됐는지 확인한 뒤 `docker compose restart openclaw-gateway`."
+    );
+  }
+  if (
+    low.includes("exceeded your current quota") ||
+    (low.includes("429") &&
+      (low.includes("google") ||
+        low.includes("gemini") ||
+        low.includes("generativelanguage")))
+  ) {
+    return (
+      "Google Gemini API: 쿼터/결제 한도(429). AI Studio·Cloud 콘솔에서 할당량·결제를 확인하세요."
+    );
+  }
+  if (low.includes("billing issue") && low.includes("anthropic")) {
+    return "Anthropic: billing(결제/쿼터)으로 모델이 비활성화된 로그가 있습니다. API 키·크레딧을 확인하세요.";
+  }
+  if (low.includes("all models failed") || low.includes("fallbacksummaryerror")) {
+    return (
+      "모든 후보 모델이 실패했습니다(429·billing 등). `docker compose logs openclaw-gateway`에서 model-fallback 줄을 확인하세요."
+    );
+  }
+  const tail = combined.replace(/\s+/g, " ").trim().slice(-1200);
+  return `OpenClaw agent 실패 (exit ${code ?? "?"}): ${tail}${hint}`;
+}
+
+/**
  * @param {string | undefined} raw
  * @returns {string}
  * @throws {Error} 투탑(동등) 정책: 한쪽이 기본 모델이 되지 않으므로 `agentId` 는 반드시 호출 측에서(멘션한 봇에 맞게) 넘김
@@ -148,13 +186,18 @@ export function createOpenClawHttpClient(opts) {
     const outText = stdout.trim();
 
     if (code !== 0) {
-      const tail = (errText || outText).slice(-4500);
-      const low = (errText + outText).toLowerCase();
+      const combined = `${errText}\n${outText}`;
+      const low = combined.toLowerCase();
       const hint =
         low.includes("gateway agent failed") || low.includes("unknown agent id")
-          ? " | 힌트: 먼저 WebSocket(게이트웨이)이 실패한 경우가 많습니다. `openclaw/.env`의 `OPENCLAW_GATEWAY_TOKEN`·GEMINI/ANTHROPIC 키를 게이트웨이와 동일한지, `docker compose logs openclaw-gateway` 로 확인."
+          ? " (웹소켓/토큰·openclaw.json 도 `docker compose logs openclaw-gateway` 로 확인)"
           : "";
-      throw new Error(`OpenClaw agent 실패 (exit ${code}): ${tail}${hint}`);
+      const short = compactOpenClawCliErrorMessage(
+        combined,
+        code,
+        hint,
+      );
+      throw new Error(short);
     }
 
     try {

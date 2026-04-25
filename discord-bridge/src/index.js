@@ -394,7 +394,8 @@ function attachHandlers(client, bot) {
         if (!msg.author?.bot) {
           await msg.reply(
             truncateDiscord(
-              `봇 내부 오류: ${e instanceof Error ? e.message : String(e)}`,
+              `봇 내부 오류: ${formatErrorForDiscordUser(e)}`,
+              1900,
             ),
           );
         }
@@ -858,7 +859,7 @@ async function handleSearchMention(
     await safeEditStatusMessage(
       status,
       msg,
-      `Error: ${e instanceof Error ? e.message : e}`,
+      `Error: ${formatErrorForDiscordUser(e)}`,
     );
   } finally {
     clearNudge2();
@@ -929,7 +930,7 @@ async function handleChatMention(
     await safeEditStatusMessage(
       status,
       msg,
-      `Error: ${e instanceof Error ? e.message : e}`,
+      `Error: ${formatErrorForDiscordUser(e)}`,
     );
   } finally {
     clearNudge2();
@@ -944,7 +945,7 @@ async function handleChatMention(
  * @param {string} content
  */
 async function safeEditStatusMessage(status, origMsg, content) {
-  const text = truncateDiscord(content, 2000);
+  const text = truncateDiscord(content, 1900);
   try {
     await status.edit({ content: text });
   } catch (e) {
@@ -1051,9 +1052,32 @@ async function handleCodingMention(
 }
 
 function truncateDiscord(s, max = 1900) {
-  const t = s.trim();
+  const t = String(s ?? "")
+    .replace(/\u0000/g, "")
+    .trim();
   if (t.length <= max) return t;
   return `${t.slice(0, max)}…`;
+}
+
+/**
+ * Discord 메시지 본문 한도(·50035) 대비 — 사용자에게 보이는 오류만
+ * @param {unknown} err
+ * @param {number} [max]
+ */
+function formatErrorForDiscordUser(err, max = 1700) {
+  let s = "";
+  if (err instanceof Error) s = err.message;
+  else if (typeof err === "string") s = err;
+  else {
+    try {
+      s = JSON.stringify(err);
+    } catch {
+      s = String(err);
+    }
+  }
+  s = s.replace(/\u0000/g, "").trim();
+  if (s.length > max) return `${s.slice(0, max - 1)}…`;
+  return s || "(알 수 없는 오류)";
 }
 
 function truncateThreadTitle(task) {
