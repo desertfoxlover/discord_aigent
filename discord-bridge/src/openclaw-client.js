@@ -59,6 +59,7 @@ export function createOpenClawHttpClient(opts) {
         throw new Error(`HTTP ${r.status} ${r.statusText || ""}`.trim());
       }
       lastHealthOkAt = Date.now();
+      console.error(`[openclaw-cli] healthz ok ${url}`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       throw new Error(

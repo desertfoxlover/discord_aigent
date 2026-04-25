@@ -64,9 +64,9 @@ const {
   DISCORD_TOKEN = "",
   DISCORD_TOKEN_GEMINI = "",
   DISCORD_TOKEN_CLAUDE = "",
-  OPENCLAW_BASE_URL = "http://127.0.0.1:18789",
+  OPENCLAW_BASE_URL: OPENCLAW_BASE_URL_RAW = "",
   /** docker-compose에서 ws://openclaw-gateway:18789 권장 */
-  OPENCLAW_GATEWAY_URL = "",
+  OPENCLAW_GATEWAY_URL: OPENCLAW_GATEWAY_URL_RAW = "",
   OPENCLAW_GATEWAY_TOKEN = "",
   /** OpenClaw `agents.list[].id` — Gemini 디스코드 봇이 쓰는 프로필 (기본 discord-gemini) */
   OPENCLAW_AGENT_GEMINI = "discord-gemini",
@@ -100,6 +100,30 @@ const {
   /** 1(기본)이면 토론 시 별도 키워드 없이도 스레드에 개설(0이면 스레드 키워드 있을 때만) */
   DISCORD_DEBATE_IN_THREAD = "1",
 } = process.env;
+
+/**
+ * Docker 안에서 `OPENCLAW_BASE_URL` 비어 있으면 `127.0.0.1`로 healthz가 잘못 가 “멈춤”처럼 보일 수 있음 → `OPENCLAW_GATEWAY_URL` 로 http 베이스 유도
+ * @param {string} baseRaw
+ * @param {string} wsRaw
+ */
+function resolveOpenClawHttpBase(baseRaw, wsRaw) {
+  const b = (baseRaw || "").trim();
+  if (b) return b.replace(/\/$/, "");
+  const g = (wsRaw || "").trim();
+  if (g.startsWith("ws://")) {
+    return `http://${g.slice(6).split("/")[0]}`;
+  }
+  if (g.startsWith("wss://")) {
+    return `https://${g.slice(6).split("/")[0]}`;
+  }
+  return "http://127.0.0.1:18789";
+}
+
+const OPENCLAW_GATEWAY_URL = (OPENCLAW_GATEWAY_URL_RAW || "").trim();
+const OPENCLAW_BASE_URL = resolveOpenClawHttpBase(
+  OPENCLAW_BASE_URL_RAW,
+  OPENCLAW_GATEWAY_URL_RAW,
+);
 
 const codingSet = new Set(
   CODING_CHANNEL_IDS.split(",")
@@ -161,6 +185,14 @@ const openclaw = OPENCLAW_GATEWAY_TOKEN
       token: OPENCLAW_GATEWAY_TOKEN,
     })
   : null;
+
+if (openclaw) {
+  console.log(
+    "[discord-bridge] OpenClaw healthz base=%s (OPENCLAW_BASE_URL) | WS=%s",
+    OPENCLAW_BASE_URL,
+    OPENCLAW_GATEWAY_URL || "(empty—check .env/compose)",
+  );
+}
 
 process.on("unhandledRejection", (reason) => {
   console.error("[discord-bridge] unhandledRejection:", reason);
@@ -682,6 +714,15 @@ const debateCallTimeoutSec = (() => {
   return 300;
 })();
 
+/** `openclaw` CLI --timeout(초) + spawn wall 과 유사 — Promise 가 안 끝날 때도 상한 */
+function openclawAgentOuterTimeoutMs(innerTimeoutSec) {
+  const s =
+    typeof innerTimeoutSec === "number" && innerTimeoutSec > 0
+      ? innerTimeoutSec
+      : 180;
+  return Math.min((s + 130) * 1000, 900_000);
+}
+
 /**
  * @param {import('discord.js').Message} msg
  * @param {object} p
@@ -786,6 +827,12 @@ async function handleSearchMention(
       fetchReply: true,
     });
   }
+  const runSec = searchTimeoutSec && searchTimeoutSec > 0 ? searchTimeoutSec : 180;
+  const clearNudge2 = scheduleStatusNudge(
+    status,
+    "…25초 경과 — `openclaw agent` 실행 중(검색). `docker compose logs -f discord-bridge`·`openclaw-gateway` 확인.",
+    25_000,
+  );
   const clearNudge = scheduleStatusNudge(
     status,
     "…처리 중 (검색/단발) — OpenClaw 응답 대기 중… (느리면 `docker compose logs` 로 게이트웨이·브리지 확인)",
@@ -794,12 +841,16 @@ async function handleSearchMention(
     console.log("[discord-bridge] search: building context…");
     const discordCtxPrefix = await buildFullDiscordCtxPrefix(msg, channelCtx);
     console.log("[discord-bridge] search: openclaw agent…");
-    const answer = await openclaw.runAgentMessage({
-      message:
-        `${discordCtxPrefix}\n\n${SEARCH_SINGLE_TURN_PREFIX}\n\n---\n\n${userText}`,
-      agentId: openclawAgentId,
-      ...(searchTimeoutSec ? { timeoutSec: searchTimeoutSec } : {}),
-    });
+    const answer = await withTimeout(
+      openclaw.runAgentMessage({
+        message:
+          `${discordCtxPrefix}\n\n${SEARCH_SINGLE_TURN_PREFIX}\n\n---\n\n${userText}`,
+        agentId: openclawAgentId,
+        ...(searchTimeoutSec ? { timeoutSec: searchTimeoutSec } : {}),
+      }),
+      openclawAgentOuterTimeoutMs(runSec),
+      "OpenClaw agent (search)",
+    );
     console.log("[discord-bridge] search: done, editing reply");
     await safeEditStatusMessage(status, msg, truncateDiscord(answer || "(empty)"));
   } catch (e) {
@@ -810,6 +861,7 @@ async function handleSearchMention(
       `Error: ${e instanceof Error ? e.message : e}`,
     );
   } finally {
+    clearNudge2();
     clearNudge();
   }
 }
@@ -845,6 +897,11 @@ async function handleChatMention(
       fetchReply: true,
     });
   }
+  const clearNudge2 = scheduleStatusNudge(
+    status,
+    `…25초 경과 — \`openclaw agent\` 실행 중(대화). \`docker compose logs -f discord-bridge\`·\`openclaw-gateway\` / GEMINI 키·쿼터 확인. (이후에도 **기본 ${chatTimeoutSec}초** 대기)`,
+    25_000,
+  );
   const clearNudge = scheduleStatusNudge(
     status,
     `…처리 중 (대화) — OpenClaw 응답 대기 중… (기본 ${chatTimeoutSec}초·느리면 \`docker compose logs\` 로 확인)`,
@@ -855,12 +912,16 @@ async function handleChatMention(
     console.log("[discord-bridge] chat: openclaw agent…", {
       timeoutSec: chatTimeoutSec,
     });
-    const answer = await openclaw.runAgentMessage({
-      message:
-        `${discordCtxPrefix}\n\n${CHAT_SINGLE_TURN_PREFIX}\n\n---\n\n${userText}`,
-      agentId: openclawAgentId,
-      timeoutSec: chatTimeoutSec,
-    });
+    const answer = await withTimeout(
+      openclaw.runAgentMessage({
+        message:
+          `${discordCtxPrefix}\n\n${CHAT_SINGLE_TURN_PREFIX}\n\n---\n\n${userText}`,
+        agentId: openclawAgentId,
+        timeoutSec: chatTimeoutSec,
+      }),
+      openclawAgentOuterTimeoutMs(chatTimeoutSec),
+      "OpenClaw agent (chat)",
+    );
     console.log("[discord-bridge] chat: done, editing reply");
     await safeEditStatusMessage(status, msg, truncateDiscord(answer || "(empty)"));
   } catch (e) {
@@ -871,6 +932,7 @@ async function handleChatMention(
       `Error: ${e instanceof Error ? e.message : e}`,
     );
   } finally {
+    clearNudge2();
     clearNudge();
   }
 }
