@@ -1,6 +1,8 @@
-# discord_ai_agent
+# discord_aigent
 
 에이전트·자동화 실험용 워크스페이스입니다.
+
+**GitHub (canonical):** [desertfoxlover/discord_aigent](https://github.com/desertfoxlover/discord_aigent)
 
 ## OpenClaw (Docker)
 
