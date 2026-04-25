@@ -3,11 +3,9 @@
     "defaults": {
       "workspace": "/home/node/.openclaw/workspace",
       "model": {
-        "primary": "anthropic/claude-opus-4-7",
+        "primary": "google/gemini-3.1-pro-preview",
         "fallbacks": [
-          "google/gemini-3.1-pro-preview",
-          "google/gemini-2.5-pro",
-          "anthropic/claude-sonnet-4-6"
+          "google/gemini-2.5-pro"
         ]
       },
       "models": {

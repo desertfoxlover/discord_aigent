@@ -16,11 +16,13 @@
 | 작업 워크스페이스 (호스트) | `data/workspace` → `/home/node/.openclaw/workspace` |
 | `docker-compose` | `openclaw-gateway` 기본 기동, `openclaw-cli`는 **profile `cli`** (일회 명령용) |
 
-**모델 ( `data/config/openclaw.json` )**
+**모델 ( `data/config/openclaw.json` ) — 디스코드 봇끼리 묶지 않음**
 
-- Primary: `anthropic/claude-opus-4-7`
-- Fallback: `google/gemini-3.1-pro-preview`, `google/gemini-2.5-pro`, `anthropic/claude-sonnet-4-6`  
-- 별칭: `opus`, `sonnet`, `gemini31`, `gemini25`
+- **`agents.defaults.model`:** Google(Gemini)만 — 전역 기본에 Anthropic을 두면 게이트웨이가 클로드→제미나이 순으로 섞어 시도해, @잼나이만 해도 로그에 클로드가 뜰 수 있음.
+- **`agents.list`:** `id: discord-gemini` → `google/...` 만 · `id: discord-claude` → `anthropic/...` 만 (서로 fallback에 상대 공급자 없음).
+- **둘이 말 붙는 경우**는 브리지에서만: 토론·코딩 루프 등 **유저가 지정한 흐름**에서만 동시에 호출.
+
+`agents.models` 별칭: `opus`, `sonnet`, `gemini31`, `gemini25` (각 list 항목이 쓰는 id만 실제 호출).
 
 > 모델 ID는 OpenClaw/공급자 버전에 따라 조정될 수 있습니다. `openclaw models list` / `openclaw models status`로 확인하세요.
 

@@ -12,11 +12,12 @@ const MAX_IO_BYTES = 50 * 1024 * 1024;
 
 /**
  * CLI stderr/stdout 이 수만 자일 수 있어 Discord 2000자·50035 를 유발 — 짧은 사용자 메시지로 압축
+ * @param {string} agentId @잼나이=discord-gemini / @클로드=discord-claude — **상대 공급자 안내는 넣지 않음**(투탑·단독 호출)
  * @param {string} combined
  * @param {number | null} code
  * @param {string} hint
  */
-function compactOpenClawCliErrorMessage(combined, code, hint) {
+function compactOpenClawCliErrorMessage(combined, code, hint, agentId) {
   const low = combined.toLowerCase();
   const unknown = combined.match(/unknown agent id "([^"]+)"/i);
   if (unknown) {
@@ -25,23 +26,67 @@ function compactOpenClawCliErrorMessage(combined, code, hint) {
       "`openclaw.json`의 `agents.list`에 이 id가 있고 `OPENCLAW_CONFIG_DIR`이 게이트웨이에 마운트됐는지 확인한 뒤 `docker compose restart openclaw-gateway`."
     );
   }
+
+  const isGem = agentId === "discord-gemini";
+  const isCla = agentId === "discord-claude";
+
+  if (isGem) {
+    if (
+      low.includes("exceeded your current quota") ||
+      (low.includes("429") &&
+        (low.includes("google") ||
+          low.includes("gemini") ||
+          low.includes("generativelanguage")))
+    ) {
+      return (
+        "Google(Gemini) 쿼터·결제(429). @잼나이(잼민이) 봇은 **Google API만** 씁니다. AI Studio/Cloud 할당량을 확인하세요."
+      );
+    }
+    if (low.includes("all models failed") || low.includes("fallbacksummaryerror")) {
+      return (
+        "이 봇(Gemini 전용)에서 모델 호출이 모두 실패했습니다. `openclaw.json`의 `discord-gemini`가 google 모델만 쓰는지, `agents.defaults`에 클로드·앤스로픽이 섞이지 않았는지 확인하세요(저장소 예시 `openclaw.json.example` 참고)."
+      );
+    }
+    if (low.includes("anthropic") || low.includes("claude")) {
+      return (
+        "이 요청은 **Google(Gemini)만** 써야 합니다. 로그에 Anthropic/Claude가 보이면 `agents.defaults`가 예전에 클로드 우선이었을 수 있어요. `openclaw.json`·게이트웨이 재시작 후, Gemini(429) 쿼터를 먼저 확인하세요."
+      );
+    }
+  }
+
+  if (isCla) {
+    if (low.includes("billing issue") && low.includes("anthropic")) {
+      return "Anthropic(Claude) billing·쿼터. @클로드 봇은 **Anthropic만** 씁니다. 콘솔에서 키·크레딧을 확인하세요.";
+    }
+    if (
+      low.includes("exceeded your current quota") ||
+      (low.includes("429") && (low.includes("google") || low.includes("gemini")))
+    ) {
+      return "이 봇은 **Anthropic(Claude)만** 써야 하는데, 로그에 Google/Gemini 오류가 끼어 있으면 `discord-claude` 항목이 anthropic만 쓰는지 `openclaw.json`을 확인하세요.";
+    }
+    if (low.includes("all models failed") || low.includes("fallbacksummaryerror")) {
+      return "Claude 전용 봇에서 모델 호출이 모두 실패했습니다. `openclaw.json`의 `discord-claude`가 anthropic만 쓰는지 확인하세요.";
+    }
+  }
+
   if (
-    low.includes("exceeded your current quota") ||
-    (low.includes("429") &&
-      (low.includes("google") ||
-        low.includes("gemini") ||
-        low.includes("generativelanguage")))
+    !isCla &&
+    (low.includes("exceeded your current quota") ||
+      (low.includes("429") &&
+        (low.includes("google") ||
+          low.includes("gemini") ||
+          low.includes("generativelanguage"))))
   ) {
     return (
       "Google Gemini API: 쿼터/결제 한도(429). AI Studio·Cloud 콘솔에서 할당량·결제를 확인하세요."
     );
   }
   if (low.includes("billing issue") && low.includes("anthropic")) {
-    return "Anthropic: billing(결제/쿼터)으로 모델이 비활성화된 로그가 있습니다. API 키·크레딧을 확인하세요.";
+    return "Anthropic: billing(결제/쿼터)로 모델이 스킵된 로그가 있습니다. (해당 봇이 Anthropic을 쓸 때만 관련.)";
   }
   if (low.includes("all models failed") || low.includes("fallbacksummaryerror")) {
     return (
-      "모든 후보 모델이 실패했습니다(429·billing 등). `docker compose logs openclaw-gateway`에서 model-fallback 줄을 확인하세요."
+      "모델 후보가 모두 실패했습니다. `docker compose logs openclaw-gateway` model-fallback 줄·`openclaw.json` agents.defaults/list 공급자 분리를 확인하세요."
     );
   }
   const tail = combined.replace(/\s+/g, " ").trim().slice(-1200);
@@ -196,6 +241,7 @@ export function createOpenClawHttpClient(opts) {
         combined,
         code,
         hint,
+        agentId,
       );
       throw new Error(short);
     }
