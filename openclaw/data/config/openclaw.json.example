@@ -1,0 +1,73 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/home/node/.openclaw/workspace",
+      "model": {
+        "primary": "anthropic/claude-opus-4-7",
+        "fallbacks": [
+          "google/gemini-3.1-pro-preview",
+          "google/gemini-2.5-pro",
+          "anthropic/claude-sonnet-4-6"
+        ]
+      },
+      "models": {
+        "anthropic/claude-opus-4-7": { "alias": "opus" },
+        "anthropic/claude-sonnet-4-6": { "alias": "sonnet" },
+        "google/gemini-3.1-pro-preview": { "alias": "gemini31" },
+        "google/gemini-2.5-pro": { "alias": "gemini25" }
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "model": {
+          "primary": "google/gemini-3.1-pro-preview",
+          "fallbacks": ["google/gemini-2.5-pro"]
+        }
+      },
+      {
+        "id": "discord-gemini",
+        "model": {
+          "primary": "google/gemini-3.1-pro-preview",
+          "fallbacks": ["google/gemini-2.5-pro"]
+        }
+      },
+      {
+        "id": "discord-claude",
+        "model": {
+          "primary": "anthropic/claude-opus-4-7",
+          "fallbacks": ["anthropic/claude-sonnet-4-6"]
+        }
+      }
+    ]
+  },
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": {
+        "source": "env",
+        "provider": "default",
+        "id": "OPENCLAW_GATEWAY_TOKEN"
+      }
+    },
+    "port": 18789,
+    "bind": "lan",
+    "tailscale": { "mode": "off", "resetOnExit": false }
+  },
+  "session": { "dmScope": "per-channel-peer" },
+  "tools": { "profile": "coding" },
+  "skills": { "install": { "nodeManager": "npm" } },
+  "plugins": {
+    "entries": {
+      "anthropic": { "enabled": true },
+      "google": { "enabled": true }
+    }
+  },
+  "auth": {
+    "profiles": {
+      "anthropic:default": { "provider": "anthropic", "mode": "api_key" },
+      "google:default": { "provider": "google", "mode": "api_key" }
+    }
+  }
+}

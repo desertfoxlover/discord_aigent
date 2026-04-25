@@ -134,6 +134,14 @@ docker compose --profile cli run --rm openclaw-cli models status
 - 환경 변수만 바꾼 경우: `docker compose up -d` 재기동
 - `data/config/openclaw.json` 수정 후 문제가 있으면: `openclaw doctor` (CLI 컨테이너로 실행) 등 공식 도구로 스키마 확인
 
+### `Unknown agent id "main"` (게이트웨이 실패 → embedded)
+
+로그에 `Gateway agent failed; falling back to embedded` 와 함께 `Unknown agent id "main"` 이 나오면, **디스코드 브리지가 `--agent` 를 잘못 넣은 게 아니라**, OpenClaw CLI가 **게이트웨이에 못 붙었을 때** 내부 기본 id **`main`**으로 임베드 런을 시도하기 때문이다. `agents.list`에 `id: "main"` 이 없으면 그대로 터진다(멀티 에이전트 설정이 흔한 [이슈](https://github.com/openclaw/openclaw/issues)와 동일).
+
+- **우선:** 게이트웨이가 실패하지 않게 한다 — `openclaw-gateway` **healthy** 여부, `OPENCLAW_GATEWAY_TOKEN` 이 **게이트웨이·discord-bridge** 양쪽 `.env`에서 **동일**한지, `docker compose logs -f openclaw-gateway` 로 원인(401·연결 끊김 등) 확인.
+- **호환:** `agents.list`에 `main` 항목을 **명시**한다(이 저장소 예시는 `data/config/openclaw.json.example` 참고). 투탑용 `discord-gemini` / `discord-claude`와 별개로, **임베드 폴백 전용** 이름일 뿐 “한 모델이 시스템 주인”이 되는 뜻은 아니다. 모델은 예시처럼 제미나이에 맞춰 두었고, 자유롭게 바꿀 수 있다.
+- `openclaw agents list` 로 등록 id를 확인한다.
+
 ---
 
 ## 공식 링크
