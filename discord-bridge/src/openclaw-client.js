@@ -11,6 +11,21 @@ const OPENCLAW_ENTRY = "/app/openclaw.mjs";
 const MAX_IO_BYTES = 50 * 1024 * 1024;
 
 /**
+ * @param {string | undefined} raw
+ * @returns {string}
+ * @throws {Error} 투탑(동등) 정책: 한쪽이 기본 모델이 되지 않으므로 `agentId` 는 반드시 호출 측에서(멘션한 봇에 맞게) 넘김
+ */
+function requireAgentId(raw) {
+  if (raw != null) {
+    const t = String(raw).trim();
+    if (t !== "") return t;
+  }
+  throw new Error(
+    "OpenClaw: agentId 가 비었습니다. `main`·단일 기본 모델을 쓰지 않습니다(투탑: @재미나이→discord-gemini, @클로드→discord-claude). 브리지 버그로 보이면 report 하세요.",
+  );
+}
+
+/**
  * @param {object} opts
  * @param {string} [opts.baseUrl] 레거시: http URL이면 ws로 바꿔 fallback
  * @param {string} [opts.gatewayUrl] ws://openclaw-gateway:18789
@@ -32,13 +47,13 @@ export function createOpenClawHttpClient(opts) {
    * @param {object} p
    * @param {string} p.message
    * @param {string} [p.sessionKey]
-   * @param {string} [p.agentId]
+   * @param {string} p.agentId `openclaw.json` `agents.list[].id` — 멘션한 봇에 맞는 id 필수(전역 기본 모델 없음)
    * @param {string} [p.model] CLI에 --model 없음; 프롬프트로만 구분
    * @param {number} [p.timeoutSec] 미지정 시 클라이언트 생성 시 기본값(초)
    */
   async function runAgentMessage(p) {
     const sessionId = p.sessionKey ?? `discord-${Date.now()}`;
-    const agentId = p.agentId ?? "main";
+    const agentId = requireAgentId(p.agentId);
     const runTimeout =
       typeof p.timeoutSec === "number" && p.timeoutSec > 0
         ? p.timeoutSec
@@ -71,7 +86,7 @@ export function createOpenClawHttpClient(opts) {
     const wallTimeoutMs = Math.min((runTimeout + 120) * 1000, 900_000);
 
     console.error(
-      `[openclaw-cli] spawn agent session=${sessionId} cliTimeoutSec=${runTimeout} wallMs=${wallTimeoutMs} gw=${gatewayUrl}`,
+      `[openclaw-cli] spawn agent agentId=${agentId} session=${sessionId} cliTimeoutSec=${runTimeout} wallMs=${wallTimeoutMs} gw=${gatewayUrl}`,
     );
 
     const { code, signal, stdout, stderr } = await spawnOpenClawAgent({

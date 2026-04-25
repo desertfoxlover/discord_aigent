@@ -6,7 +6,7 @@
  * 각 봇은 **자신이 멘션되었거나**, **자신의 메시지에 답장**이 온 경우에만 반응합니다.
  *
  * 채널 규칙(CHAT / SEARCH / CODING 채널 ID 목록)은 두 봇 공통입니다.
- * 봇을 둘 다 켠 경우: 재미나이 쪽 @ → OpenClaw 에이전트 `discord-gemini`, 클로드 @ → `discord-claude` (openclaw.json `agents.list`).
+ * 봇을 둘 다 켠 경우: 재미나이 쪽 @ → `discord-gemini`, 클로드 @ → `discord-claude` (투탑: 한쪽이 전역 기본 모델이 아님, 멘션한 id만 호출).
  */
 import { Client, GatewayIntentBits } from "discord.js";
 import { readFileSync } from "node:fs";
