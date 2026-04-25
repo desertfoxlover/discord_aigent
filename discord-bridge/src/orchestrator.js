@@ -180,3 +180,54 @@ function preview(s, n = 500) {
   if (t.length <= n) return t;
   return `${t.slice(0, n)}…`;
 }
+
+/**
+ * 토론: 매 라운드마다 (메인 모델 한 번 → 상대 모델 한 번) = 1 왕복.
+ * `rounds` = 왕복 횟수(기본 3 → 메인/상대 각 3번씩, 총 6 API 호출).
+ *
+ * @param {object} opts
+ * @param {string} opts.task
+ * @param {(round: number, task: string, history: { side: string; round: number; text: string }[]) => string} opts.buildMainPrompt
+ * @param {(round: number, task: string, lastMain: string, history: { side: string; round: number; text: string }[]) => string} opts.buildOtherPrompt
+ * @param {(m: string) => Promise<string>} opts.runMain
+ * @param {(m: string) => Promise<string>} opts.runOther
+ * @param {number} [opts.rounds=3]
+ * @param {(n: { type: 'debate'; phase: 'main'|'other'; round: number; text: string }) => Promise<void>} [opts.onNotify]
+ */
+export async function runDebateExchangeLoop(opts) {
+  const {
+    task,
+    buildMainPrompt,
+    buildOtherPrompt,
+    runMain,
+    runOther,
+    rounds = 3,
+    onNotify = async () => {},
+  } = opts;
+
+  /** @type {{ side: string; round: number; text: string }[]} */
+  const history = [];
+  const nRounds = Math.min(
+    20,
+    Math.max(
+      1,
+      typeof rounds === "number" && rounds > 0
+        ? Math.floor(rounds)
+        : 3,
+    ),
+  );
+
+  for (let r = 1; r <= nRounds; r++) {
+    const pMain = buildMainPrompt(r, task, history);
+    const tMain = await runMain(pMain);
+    history.push({ side: "main", round: r, text: tMain });
+    await onNotify({ type: "debate", phase: "main", round: r, text: tMain });
+
+    const pOth = buildOtherPrompt(r, task, tMain, history);
+    const tOth = await runOther(pOth);
+    history.push({ side: "other", round: r, text: tOth });
+    await onNotify({ type: "debate", phase: "other", round: r, text: tOth });
+  }
+
+  return { status: "complete", history };
+}

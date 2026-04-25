@@ -106,3 +106,79 @@ export function buildGuildDescriptionRulesBlock(description) {
     "---",
   ].join("\n");
 }
+
+const DEBATE_MAIN_INTRO = `
+You are the model the user @mentioned first (the "main" side in this debate).
+Another AI model will respond after you; you are not a code-reviewer, you are a debate participant.
+Be concise, structured. Same language as the user when possible.
+Do not use VERDICT: lines; this is not a code review.
+`.trim();
+
+const DEBATE_OTHER_INTRO = `
+You are the "other" model in a two-way debate, paired with a different model that went first in each round.
+Respond to the topic and, from round 1 onward, respond to the main model's latest points as well. Stay constructive.
+Be concise. Same language as the user when possible. No VERDICT: line.
+`.trim();
+
+/**
+ * @param {number} round
+ * @param {string} task
+ * @param {Array<{ side: string; round: number; text: string }>} history
+ * @param {{ mode?: 'search' | 'chat' }} [style]
+ */
+export function buildDebateMainPrompt(
+  round,
+  task,
+  history,
+  style = {},
+) {
+  const extra =
+    style.mode === "search"
+      ? "You may use factual, up-to-date knowledge if relevant. If unsure, say so."
+      : "";
+  let backAndForth = "";
+  if (round > 1) {
+    const oPrev = (history || []).find(
+      (h) => h.side === "other" && h.round === round - 1,
+    );
+    if (oPrev?.text) {
+      backAndForth = `이전 왕복에서 상대(다른) 모델이 말한 내용:\n${oPrev.text}\n\n이제 라운드 ${round} — 위에 응답·보완·반박하며 이어가세요.`;
+    }
+  }
+  return [
+    DEBATE_MAIN_INTRO,
+    extra,
+    `주제/요청:\n${task}`,
+    `지금은 토론 ${round}번째 왕복의 **당신(메인) 턴**입니다.`,
+    backAndForth,
+    "지금 턴에만 답하세요(짧게).",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/**
+ * @param {number} round
+ * @param {string} task
+ * @param {string} _mainLast
+ * @param {Array<{ side: string; round: number; text: string }>} history
+ * @param {{ mode?: 'search' | 'chat' }} [style]
+ */
+export function buildDebateOtherPrompt(
+  round,
+  task,
+  _mainLast,
+  history,
+  _style = {},
+) {
+  const lastMain = [...(history || [])]
+    .reverse()
+    .find((h) => h.side === "main" && h.round === round);
+  const mText = (lastMain?.text || _mainLast || "").trim();
+  return [
+    DEBATE_OTHER_INTRO,
+    `주제/요청:\n${task}`,
+    `이번 ${round}번째 왕복에서, 방금 **메인 모델**이 말한 내용(당신은 **상대(검수 쪽) 모델**):\n${mText}`,
+    "응답·반박·보완을 이어가세요(짧게).",
+  ].join("\n\n");
+}

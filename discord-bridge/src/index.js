@@ -6,6 +6,7 @@
  * 각 봇은 **자신이 멘션되었거나**, **자신의 메시지에 답장**이 온 경우에만 반응합니다.
  *
  * 채널 규칙(CHAT / SEARCH / CODING 채널 ID 목록)은 두 봇 공통입니다.
+ * 봇을 둘 다 켠 경우: 재미나이 쪽 @ → OpenClaw 에이전트 `discord-gemini`, 클로드 @ → `discord-claude` (openclaw.json `agents.list`).
  */
 import { Client, GatewayIntentBits } from "discord.js";
 import { readFileSync } from "node:fs";
@@ -13,14 +14,22 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { createOpenClawHttpClient } from "./openclaw-client.js";
-import { runPairLoop } from "./orchestrator.js";
-import { classifyMentionIntent } from "./intent.js";
+import { runDebateExchangeLoop, runPairLoop } from "./orchestrator.js";
+import {
+  classifyMentionIntent,
+  detectDebateIntent,
+  detectThreadIntent,
+  parseDebateRoundsRequest,
+  stripControlPhrasesForModels,
+} from "./intent.js";
 import {
   buildEditorUserContent,
   buildReviewerUserContent,
   buildChannelTopicRulesBlock,
   buildDiscordChannelContextPrefix,
   buildGuildDescriptionRulesBlock,
+  buildDebateMainPrompt,
+  buildDebateOtherPrompt,
   CHAT_SINGLE_TURN_PREFIX,
   SEARCH_SINGLE_TURN_PREFIX,
 } from "./prompts.js";
@@ -59,9 +68,10 @@ const {
   /** docker-compose에서 ws://openclaw-gateway:18789 권장 */
   OPENCLAW_GATEWAY_URL = "",
   OPENCLAW_GATEWAY_TOKEN = "",
-  OPENCLAW_AGENT_ID = "main",
-  MODEL_EDITOR = "anthropic/claude-opus-4-7",
-  MODEL_REVIEWER = "google/gemini-3.1-pro-preview",
+  /** OpenClaw `agents.list[].id` — Gemini 디스코드 봇이 쓰는 프로필 (기본 discord-gemini) */
+  OPENCLAW_AGENT_GEMINI = "discord-gemini",
+  /** OpenClaw `agents.list[].id` — Claude 디스코드 봇이 쓰는 프로필 (기본 discord-claude) */
+  OPENCLAW_AGENT_CLAUDE = "discord-claude",
   CODING_CHANNEL_IDS = "",
   SEARCH_CHANNEL_IDS = "",
   /** 대화 전용 채널(말동무 등). ID를 넣으면 그 채널에서는 항상 단발 대화. */
@@ -85,6 +95,10 @@ const {
   DISCORD_APPEND_GUILD_DESCRIPTION = "",
   /** 서버 설명 최대 글자(넘치면 잘림) */
   DISCORD_GUILD_DESCRIPTION_MAX_CHARS = "1200",
+  /** 토론 왕복 횟수(메인+상대 각 1쌍이 1회). `5회` 멘트로 덮어쓰기 */
+  DISCORD_DEBATE_ROUNDS = "3",
+  /** 1(기본)이면 토론 시 별도 키워드 없이도 스레드에 개설(0이면 스레드 키워드 있을 때만) */
+  DISCORD_DEBATE_IN_THREAD = "1",
 } = process.env;
 
 const codingSet = new Set(
@@ -205,12 +219,39 @@ function createDiscordClient() {
 }
 
 /**
- * @param {Client} client
+ * @param {'gemini'|'claude'} kind
  */
-function attachHandlers(client) {
+function resolveOpenClawAgentId(kind) {
+  if (kind === "gemini") {
+    return (OPENCLAW_AGENT_GEMINI || "discord-gemini").trim() || "discord-gemini";
+  }
+  return (OPENCLAW_AGENT_CLAUDE || "discord-claude").trim() || "discord-claude";
+}
+
+/**
+ * @param {'gemini'|'claude'} kind — 멘션한 쪽 = main, 반대 = other (코딩: 편집 / 검수)
+ * @returns {{ main: string, other: string }}
+ */
+function getOpenClawAgentIdPair(/** @type {"gemini"|"claude"} */ kind) {
+  const g = (OPENCLAW_AGENT_GEMINI || "discord-gemini").trim() || "discord-gemini";
+  const c = (OPENCLAW_AGENT_CLAUDE || "discord-claude").trim() || "discord-claude";
+  if (kind === "gemini") {
+    return { main: g, other: c };
+  }
+  return { main: c, other: g };
+}
+
+/**
+ * @param {import('discord.js').Client} client
+ * @param {object} bot
+ * @param {'gemini'|'claude'} bot.kind
+ */
+function attachHandlers(client, bot) {
+  const idSingle = resolveOpenClawAgentId(bot.kind);
+  const idPair = getOpenClawAgentIdPair(bot.kind);
   client.once("ready", () => {
     console.log(
-      `Logged in as ${client.user?.tag} (mention or reply) [bridge: fetch-timeout+edit-reply]`,
+      `Logged in as ${client.user?.tag} (OpenClaw: single=${idSingle} | coding main=${idPair.main} other=${idPair.other}) (mention or reply)`,
     );
   });
 
@@ -251,16 +292,69 @@ function attachHandlers(client) {
         return;
       }
 
+      const wantDebate = detectDebateIntent(userText);
+      const wantThread = detectThreadIntent(userText);
+      const debateRoundsDefault = (() => {
+        const n = Number(DISCORD_DEBATE_ROUNDS);
+        return Number.isFinite(n) && n > 0 ? n : 3;
+      })();
+      const useThreadForDebate =
+        wantThread || (wantDebate && String(DISCORD_DEBATE_IN_THREAD).trim() === "1");
+      const useThreadForChatSearch = wantThread;
+      const textForModel =
+        stripControlPhrasesForModels(userText) || userText.trim();
+      if (!textForModel && wantDebate) {
+        await msg.reply("토론 주제를 짧게라도 써 주세요(키워드만으로는 전달이 애매합니다).");
+        return;
+      }
+      if (wantDebate) {
+        const debateRounds = parseDebateRoundsRequest(
+          userText,
+          debateRoundsDefault,
+        );
+        const discordCtxPrefix = await buildFullDiscordCtxPrefix(
+          msg,
+          channelCtx,
+        );
+        await handleDebateMention(msg, {
+          userText: textForModel,
+          fullUserText: userText,
+          channelCtx,
+          discordCtxPrefix,
+          pair: getOpenClawAgentIdPair(bot.kind),
+          useThread: useThreadForDebate && !msg.channel.isThread(),
+          rounds: debateRounds,
+        });
+        return;
+      }
+
       const defaultMode = normalizeDefaultMode(DEFAULT_MENTION_MODE);
       const action = planMentionAction(userText, channelCtx, defaultMode);
 
       if (action === "search") {
-        await handleSearchMention(msg, userText, channelCtx);
+        await handleSearchMention(
+          msg,
+          textForModel,
+          channelCtx,
+          idSingle,
+          { useThread: useThreadForChatSearch && !msg.channel.isThread() },
+        );
       } else if (action === "chat") {
-        await handleChatMention(msg, userText, channelCtx);
+        await handleChatMention(
+          msg,
+          textForModel,
+          channelCtx,
+          idSingle,
+          { useThread: useThreadForChatSearch && !msg.channel.isThread() },
+        );
       } else {
         const discordCtxPrefix = await buildFullDiscordCtxPrefix(msg, channelCtx);
-        await handleCodingMention(msg, userText, discordCtxPrefix);
+        await handleCodingMention(
+          msg,
+          textForModel,
+          discordCtxPrefix,
+          getOpenClawAgentIdPair(bot.kind),
+        );
       }
     } catch (e) {
       console.error("[discord-bridge] messageCreate:", e);
@@ -279,10 +373,28 @@ function attachHandlers(client) {
   });
 }
 
-for (const token of discordTokens) {
+/** @type {{ token: string, kind: "gemini" | "claude" }[]} */
+const discordBotEntries = [];
+const seenToken = new Set();
+for (const { token, kind } of [
+  { token: tokenGemini, kind: "gemini" },
+  { token: tokenClaude, kind: "claude" },
+]) {
+  if (!token) continue;
+  if (seenToken.has(token)) {
+    console.warn(
+      `[discord-bridge] token reused for both bots; one client only. Using first kind only.`,
+    );
+    continue;
+  }
+  seenToken.add(token);
+  discordBotEntries.push({ token, kind });
+}
+
+for (const b of discordBotEntries) {
   const client = createDiscordClient();
-  attachHandlers(client);
-  client.login(token).catch((e) => {
+  attachHandlers(client, b);
+  client.login(b.token).catch((e) => {
     console.error("Discord login failed:", e);
     process.exit(1);
   });
@@ -564,16 +676,116 @@ const chatTimeoutSec = (() => {
   return 240;
 })();
 
+const debateCallTimeoutSec = (() => {
+  const n = Number(OPENCLAW_CHAT_TIMEOUT_SEC);
+  if (Number.isFinite(n) && n > 0) return Math.min(600, n * 2);
+  return 300;
+})();
+
+/**
+ * @param {import('discord.js').Message} msg
+ * @param {object} p
+ * @param {string} p.userText
+ * @param {{ configuredRole: 'chat'|'search'|'coding'|null }} p.channelCtx
+ * @param {string} p.discordCtxPrefix
+ * @param {{ main: string, other: string }} p.pair
+ * @param {boolean} p.useThread
+ * @param {number} p.rounds
+ * @param {string} [p.fullUserText] unused; caller may pass for future use
+ */
+async function handleDebateMention(msg, p) {
+  const { userText, channelCtx, discordCtxPrefix, pair, useThread, rounds } = p;
+  const styleMode = channelCtx.configuredRole === "search" ? "search" : "chat";
+  const sessionBase = `debate-${msg.id}`;
+  const taskWithCtx = `${discordCtxPrefix}\n\n[토론: ${rounds}회 왕복 · 메인=${pair.main} · 상대=${pair.other}]\n\n${userText}`;
+
+  const runOpenClaw = (id, m) =>
+    openclaw.runAgentMessage({
+      message: m,
+      sessionKey: `${sessionBase}-${id}-${Date.now()}`,
+      agentId: id,
+      timeoutSec: debateCallTimeoutSec,
+    });
+
+  /** @type {import('discord.js').TextChannel|import('discord.js').ThreadChannel|import('discord.js').DMChannel|import('discord.js').NewsChannel|import('discord.js').AnyThreadChannel|import('discord.js').PublicThreadChannel|import('discord.js').PrivateThreadChannel} */
+  let outChannel = msg.channel;
+  if (useThread) {
+    const th = await msg.startThread({
+      name: truncateThreadTitle(userText),
+      autoArchiveDuration: 1440,
+    });
+    outChannel = th;
+    await th.send(
+      `**토론** ${rounds}회 왕복(메인 \`${pair.main}\` → 상대 \`${pair.other}\` 순서) 시작…`,
+    );
+  } else {
+    const st = await msg.reply(
+      `**토론** ${rounds}회 왕복(메인 \`${pair.main}\` / 상대 \`${pair.other}\`) — 이 채널에 차례대로 보냅니다…`,
+    );
+    if (st.channel) outChannel = st.channel;
+  }
+
+  const style = { mode: styleMode === "search" ? "search" : "chat" };
+  try {
+    await runDebateExchangeLoop({
+      task: taskWithCtx,
+      buildMainPrompt: (round, task, history) =>
+        buildDebateMainPrompt(round, task, history, style),
+      buildOtherPrompt: (round, task, lastMain, history) =>
+        buildDebateOtherPrompt(round, task, lastMain, history, style),
+      runMain: (m) => runOpenClaw(pair.main, m),
+      runOther: (m) => runOpenClaw(pair.other, m),
+      rounds,
+      onNotify: async (n) => {
+        if (n.type === "debate" && n.phase) {
+          const head =
+            n.phase === "main"
+              ? `**[왕복 ${n.round} · 메인 \`${pair.main}\`]**`
+              : `**[왕복 ${n.round} · 상대 \`${pair.other}\`]**`;
+          const body = truncateDiscord(n.text, 1800);
+          await outChannel.send({ content: `${head}\n\n${body}` });
+        }
+      },
+    });
+    await outChannel.send("— **토론 끝** — (왕복 횟수는 `5회` 등 멘트나 `DISCORD_DEBATE_ROUNDS`로 조절)");
+  } catch (e) {
+    const em = e instanceof Error ? e.message : String(e);
+    await outChannel.send(`**토론 중 오류:** ${truncateDiscord(em, 500)}`);
+    console.error("[discord-bridge] handleDebateMention:", e);
+  }
+}
+
 /**
  * @param {import('discord.js').Message} msg
  * @param {string} userText
  * @param {{ configuredRole: 'chat'|'search'|'coding'|null }} channelCtx
+ * @param {string} openclawAgentId
+ * @param {{ useThread?: boolean }} [opts]
  */
-async function handleSearchMention(msg, userText, channelCtx) {
-  const status = await msg.reply({
-    content: "…처리 중 (검색/단발)…",
-    fetchReply: true,
-  });
+async function handleSearchMention(
+  msg,
+  userText,
+  channelCtx,
+  openclawAgentId,
+  opts = {},
+) {
+  const useThread = Boolean(opts?.useThread);
+  /** @type {import('discord.js').Message} */
+  let status;
+  if (useThread) {
+    const th = await msg.startThread({
+      name: truncateThreadTitle(userText),
+      autoArchiveDuration: 1440,
+    });
+    status = /** @type {import('discord.js').Message} */ (await th.send(
+      "…처리 중 (검색/단발)…",
+    ));
+  } else {
+    status = await msg.reply({
+      content: "…처리 중 (검색/단발)…",
+      fetchReply: true,
+    });
+  }
   const clearNudge = scheduleStatusNudge(
     status,
     "…처리 중 (검색/단발) — OpenClaw 응답 대기 중… (느리면 `docker compose logs` 로 게이트웨이·브리지 확인)",
@@ -585,8 +797,7 @@ async function handleSearchMention(msg, userText, channelCtx) {
     const answer = await openclaw.runAgentMessage({
       message:
         `${discordCtxPrefix}\n\n${SEARCH_SINGLE_TURN_PREFIX}\n\n---\n\n${userText}`,
-      agentId: OPENCLAW_AGENT_ID,
-      model: MODEL_REVIEWER,
+      agentId: openclawAgentId,
       ...(searchTimeoutSec ? { timeoutSec: searchTimeoutSec } : {}),
     });
     console.log("[discord-bridge] search: done, editing reply");
@@ -607,12 +818,33 @@ async function handleSearchMention(msg, userText, channelCtx) {
  * @param {import('discord.js').Message} msg
  * @param {string} userText
  * @param {{ configuredRole: 'chat'|'search'|'coding'|null }} channelCtx
+ * @param {string} openclawAgentId
+ * @param {{ useThread?: boolean }} [opts]
  */
-async function handleChatMention(msg, userText, channelCtx) {
-  const status = await msg.reply({
-    content: "…처리 중 (대화)…",
-    fetchReply: true,
-  });
+async function handleChatMention(
+  msg,
+  userText,
+  channelCtx,
+  openclawAgentId,
+  opts = {},
+) {
+  const useThread = Boolean(opts?.useThread);
+  /** @type {import('discord.js').Message} */
+  let status;
+  if (useThread) {
+    const th = await msg.startThread({
+      name: truncateThreadTitle(userText),
+      autoArchiveDuration: 1440,
+    });
+    status = /** @type {import('discord.js').Message} */ (await th.send(
+      "…처리 중 (대화)…",
+    ));
+  } else {
+    status = await msg.reply({
+      content: "…처리 중 (대화)…",
+      fetchReply: true,
+    });
+  }
   const clearNudge = scheduleStatusNudge(
     status,
     `…처리 중 (대화) — OpenClaw 응답 대기 중… (기본 ${chatTimeoutSec}초·느리면 \`docker compose logs\` 로 확인)`,
@@ -626,8 +858,7 @@ async function handleChatMention(msg, userText, channelCtx) {
     const answer = await openclaw.runAgentMessage({
       message:
         `${discordCtxPrefix}\n\n${CHAT_SINGLE_TURN_PREFIX}\n\n---\n\n${userText}`,
-      agentId: OPENCLAW_AGENT_ID,
-      model: MODEL_REVIEWER,
+      agentId: openclawAgentId,
       timeoutSec: chatTimeoutSec,
     });
     console.log("[discord-bridge] chat: done, editing reply");
@@ -657,10 +888,14 @@ async function safeEditStatusMessage(status, origMsg, content) {
   } catch (e) {
     console.error("[discord-bridge] status.edit failed:", e);
     try {
-      await origMsg.channel.send({
-        content: text,
-        reply: { messageReference: origMsg.id },
-      });
+      if (status.channel && status.channel.isThread()) {
+        await status.channel.send({ content: text });
+      } else {
+        await origMsg.channel.send({
+          content: text,
+          reply: { messageReference: origMsg.id },
+        });
+      }
     } catch (e2) {
       console.error("[discord-bridge] channel.send fallback failed:", e2);
     }
@@ -668,11 +903,18 @@ async function safeEditStatusMessage(status, origMsg, content) {
 }
 
 /**
+ * @param {{ main: string, other: string }} pair
+ * main = 멘션한 쪽(편집/구현) · other = 상대 모델(검수)
  * @param {import('discord.js').Message} msg
  * @param {string} task
  * @param {string} discordCtxPrefix
  */
-async function handleCodingMention(msg, task, discordCtxPrefix) {
+async function handleCodingMention(
+  msg,
+  task,
+  discordCtxPrefix,
+  pair,
+) {
   const thread = await msg.startThread({
     name: truncateThreadTitle(task),
     autoArchiveDuration: 60,
@@ -685,19 +927,19 @@ async function handleCodingMention(msg, task, discordCtxPrefix) {
     openclaw.runAgentMessage({
       message: prompt,
       sessionKey: `${sessionBase}-editor`,
-      agentId: OPENCLAW_AGENT_ID,
-      model: MODEL_EDITOR,
+      agentId: pair.main,
     });
 
   const runReviewer = (prompt) =>
     openclaw.runAgentMessage({
       message: prompt,
       sessionKey: `${sessionBase}-reviewer`,
-      agentId: OPENCLAW_AGENT_ID,
-      model: MODEL_REVIEWER,
+      agentId: pair.other,
     });
 
-  await thread.send("**편집자 ↔ 검토자** 루프 시작…");
+  await thread.send(
+    `**편집(메인·${pair.main}) ↔ 검수(상대·${pair.other})** 루프 시작…`,
+  );
 
   const result = await runPairLoop({
     task: taskWithCtx,

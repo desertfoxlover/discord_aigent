@@ -10,7 +10,7 @@
 |------|------|--------|
 | **OpenClaw (Docker)** | 집 PC에서 도는 **게이트웨이** | API 키로 클로드·재미나이 호출, (설정에 따라) 마운트된 **워크스페이스 폴더**에 도구로 파일 수정 |
 | **`openclaw/.env`** | 게이트웨이용 비밀 | `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` 등, **`OPENCLAW_GATEWAY_TOKEN`** |
-| **이 봇 (`discord-bridge`)** | Node.js 프로세스(호스트에서 실행) | 디스코드 메시지를 읽고, 게이트웨이에 “지금은 편집자 / 지금은 검토자” 호출을 **순서대로** 넘김 |
+| **이 봇 (`discord-bridge`)** | Node.js 프로세스(호스트에서 실행) | **@한 봇**에 맞는 OpenClaw `agents.list` id로 호출(재미나이 봇 = `discord-gemini`, 클로드 봇 = `discord-claude`). 코딩 루프는 **같은 프로필**로 편집↔검수 둘 다 돎 |
 | **`discord-bridge/.env`** | 봇용 비밀 | **`DISCORD_TOKEN_GEMINI`** (첫 봇), 선택 **`DISCORD_TOKEN_CLAUDE`**, **`OPENCLAW_GATEWAY_TOKEN`**, 채널 ID 등 (`DISCORD_TOKEN` 이름도 호환) |
 | **잼민이(표시 이름)** | 디스코드에서 보이는 **봇 닉네임** | 포털/서버에서 이름만 바꾸면 됨. 코드에 “잼민이” 문자열을 넣지 않아도 **`@표시이름`** 은 동작함(멘션 = 봇 **사용자 ID**) |
 
@@ -69,8 +69,8 @@ flowchart LR
 
 ## 알고리즘(티키타카) 요약
 
-1. 유저가 멘션으로 작업을 시킴 → (코딩 모드면) **스레드** 생성.
-2. **라운드 N:** 편집자(Claude 모델) → 검토자(Gemini 모델).
+1. 유저가 **어느 봇**을 @했는지에 따라 게이트웨이 `agents.list`의 그 프로필이 쓰임(재미나이/클로드 **동급**).
+2. (코딩 모드면) **스레드** 생성. **라운드 N:** 편집자·검토자 모두 **그 봇이 쓰는 동일 OpenClaw 에이전트**(프롬프트만 “편집/검토” 역할 분리).
 3. 검토자는 끝에 `VERDICT: APPROVE | NEEDS_WORK | BLOCKED` (`prompts.js`).
 4. **APPROVE** → 완료. **BLOCKED** → 중단. **NEEDS_WORK** 반복이 **같은 지문**이면 교착 처리. **MAX_ROUNDS** 초과 시 중단.
 
@@ -115,6 +115,15 @@ flowchart LR
 - 게이트웨이를 공인 인터넷에 직접 열지 말 것. 모바일은 **Tailscale** 등 권장.
 - 토큰·API 키는 **`.env`만**.
 - 봇은 호스트에서 돌아감 — 봇이 해킹당하면 **게이트웨이 토큰**도 위험해지므로, 가능하면 봇·게이트웨이 모두 **집 네트워크 안**에서만 쓰기.
+
+---
+
+## GitHub Actions · GHCR 이미지
+
+`main`에 `discord-bridge/**` 변경이 푸시되면 루트의 `.github/workflows/publish-discord-bridge.yml`이 `discord-bridge` Docker 이미지를 빌드해 **ghcr.io**에 올립니다. 태그 예: `discord-bridge`, `discord-bridge-latest`, `discord-bridge-<커밋 sha>`.
+
+- 이미지: `ghcr.io/<github 사용자 또는 org>/<저장소 이름 lower>:discord-bridge-latest` (실제 풀 주소는 GitHub **Packages** 탭에서 확인)
+- `openclaw/docker-compose.yml`의 `discord-bridge` 서비스에서 `build:` 대신 위 `image:`를 쓰면 로컬 `docker build` 없이 쓸 수 있음(비공개 저장소/패키지면 `docker login ghcr.io` + 읽기 권한 필요)
 
 ---
 
