@@ -19,13 +19,6 @@
     },
     "list": [
       {
-        "id": "main",
-        "model": {
-          "primary": "google/gemini-3.1-pro-preview",
-          "fallbacks": ["google/gemini-2.5-pro"]
-        }
-      },
-      {
         "id": "discord-gemini",
         "model": {
           "primary": "google/gemini-3.1-pro-preview",

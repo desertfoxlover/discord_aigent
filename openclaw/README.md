@@ -134,13 +134,15 @@ docker compose --profile cli run --rm openclaw-cli models status
 - 환경 변수만 바꾼 경우: `docker compose up -d` 재기동
 - `data/config/openclaw.json` 수정 후 문제가 있으면: `openclaw doctor` (CLI 컨테이너로 실행) 등 공식 도구로 스키마 확인
 
-### `Unknown agent id "main"` (게이트웨이 실패 → embedded)
+### `Unknown agent id "main"` 또는 채팅이 `…OpenClaw 응답 대기…`에서 멈춤
 
-로그에 `Gateway agent failed; falling back to embedded` 와 함께 `Unknown agent id "main"` 이 나오면, **디스코드 브리지가 `--agent` 를 잘못 넣은 게 아니라**, OpenClaw CLI가 **게이트웨이에 못 붙었을 때** 내부 기본 id **`main`**으로 임베드 런을 시도하기 때문이다. `agents.list`에 `id: "main"` 이 없으면 그대로 터진다(멀티 에이전트 설정이 흔한 [이슈](https://github.com/openclaw/openclaw/issues)와 동일).
+- **정체(`처리 중` 240초·답 없음):** 대부분 **게이트웨이/키/네트워크** 문제다. `OPENCLAW_GATEWAY_TOKEN` 이 **openclaw `.env`와 `discord-bridge/.env`에서 동일**한지, `docker compose ps` 에서 `openclaw-gateway` **healthy** 인지, `docker compose logs -f openclaw-gateway`·`discord-bridge` 로 401/연결 실패/모델 오류를 본다. `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` 등이 컨테이너에 실제로 들어갔는지도 확인한다.
 
-- **우선:** 게이트웨이가 실패하지 않게 한다 — `openclaw-gateway` **healthy** 여부, `OPENCLAW_GATEWAY_TOKEN` 이 **게이트웨이·discord-bridge** 양쪽 `.env`에서 **동일**한지, `docker compose logs -f openclaw-gateway` 로 원인(401·연결 끊김 등) 확인.
-- **호환:** `agents.list`에 `main` 항목을 **명시**한다(이 저장소 예시는 `data/config/openclaw.json.example` 참고). 투탑용 `discord-gemini` / `discord-claude`와 별개로, **임베드 폴백 전용** 이름일 뿐 “한 모델이 시스템 주인”이 되는 뜻은 아니다. 모델은 예시처럼 제미나이에 맞춰 두었고, 자유롭게 바꿀 수 있다.
-- `openclaw agents list` 로 등록 id를 확인한다.
+- **`Unknown agent id "main"`** 은 흔히 로그에 `Gateway agent failed; falling back to embedded` 가 앞에 붙는다. 즉 **게이트웨이에 먼저 실패한 뒤** OpenClaw CLI가 임베드 루트로 갈 때 내부에서 **`main` id**를 쓰는 경우가 있어, `agents.list`에 그 이름이 없으면 터진다.
+
+- **권장:** `agents.list`에 **`id: "main"`을 넣는 방식은 이 저장소에서는 권장하지 않는다.** 환경에 따라 **멈춤·이전과 같은 이상**이 다시 드러난 사례가 있어, **투탑(`discord-gemini` / `discord-claude`만 쓰는 전제)**과도 헷갈리기 쉽다. 먼저 **게이트웨이가 항상 성공**하도록 토큰·연결·키를 잡는 것이 맞다.
+
+- (알고만 두기) OpenClaw 쪽에서 임베드 폴백용 `main` 이야기는 [다중 에이전트 이슈](https://github.com/openclaw/openclaw/issues) 등에서 볼 수 있으나, **잘 맞는 해법이 아닐 수 있으면 쓰지 말고** 본질(게이트웨이 정상)을 고친다. `openclaw agents list` 로 등록 id를 확인한다.
 
 ---
 
