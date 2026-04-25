@@ -1,0 +1,24 @@
+# Secrets — never commit
+.env
+**/.env
+!.env.example
+!**/.env.example
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Logs & temp
+*.log
+**/tmp/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.cursor/
+
+# OpenClaw data/workspace: often a nested git checkout — breaks `git add` if not ignored
+openclaw/data/workspace/
+
+# Drop-in screenshots at repo root (remove this line to track on purpose)
+/image.png
