@@ -110,6 +110,13 @@ services:
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       # Docker 네트워크에서 ws:// 호스트명은 non-loopback → OpenClaw 보안 검사 통과용(내부망 한정)
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-1}
+      # `openclaw.mjs agent` 자식 프로세스가 모델을 부를 때 사용 — env_file 누락/순서와 무관하게 게이트웨이와 동일 값으로 맞춤
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      TZ: ${OPENCLAW_TZ:-UTC}
     restart: unless-stopped
     depends_on:
       openclaw-gateway:

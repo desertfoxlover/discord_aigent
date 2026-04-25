@@ -40,6 +40,38 @@ export function createOpenClawHttpClient(opts) {
       httpToWs(opts.baseUrl) ||
       "ws://openclaw-gateway:18789",
   );
+  const httpBase = resolveHttpBaseForHealth(
+    opts.baseUrl || process.env.OPENCLAW_BASE_URL,
+    gatewayUrl,
+  );
+  let lastHealthOkAt = 0;
+  const healthCacheMs = 12_000;
+
+  /** 스폰 전에 /healthz 로 게이트웨이가 살아 있는지 확인(캐시로 과다 요청 방지) */
+  async function ensureGatewayReachable() {
+    if (Date.now() - lastHealthOkAt < healthCacheMs) return;
+    const url = `${httpBase}/healthz`;
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 10_000);
+    try {
+      const r = await fetch(url, { signal: ac.signal });
+      if (!r.ok) {
+        throw new Error(`HTTP ${r.status} ${r.statusText || ""}`.trim());
+      }
+      lastHealthOkAt = Date.now();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(
+        `게이트웨이 healthz 실패 (${url}): ${msg} — ` +
+          "`docker compose ps` 로 openclaw-gateway 가 healthy 인지, " +
+          "`OPENCLAW_BASE_URL` 이 컨테이너에선 `http://openclaw-gateway:18789` 인지, " +
+          "`OPENCLAW_GATEWAY_TOKEN` 이 게이트웨이·브리지에서 동일한지 확인하세요.",
+      );
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
   /** CLI --timeout 미지정·멈춤 시에도 프로세스가 무한 대기하지 않게 기본값 보수적으로 */
   const timeoutSec = opts.timeoutSec ?? 180;
 
@@ -52,6 +84,7 @@ export function createOpenClawHttpClient(opts) {
    * @param {number} [p.timeoutSec] 미지정 시 클라이언트 생성 시 기본값(초)
    */
   async function runAgentMessage(p) {
+    await ensureGatewayReachable();
     const sessionId = p.sessionKey ?? `discord-${Date.now()}`;
     const agentId = requireAgentId(p.agentId);
     const runTimeout =
@@ -77,6 +110,8 @@ export function createOpenClawHttpClient(opts) {
       OPENCLAW_GATEWAY_URL: gatewayUrl,
       OPENCLAW_GATEWAY_TOKEN: token,
       HOME: process.env.HOME || "/home/node",
+      // 일부 .env에 `OPENCLAW_AGENT_ID=main` 등이 남아 임베드/CLI가 --agent 대신 쓰는 사례 방지(투탑=명시 id만)
+      OPENCLAW_AGENT_ID: agentId,
     };
 
     /**
@@ -113,7 +148,12 @@ export function createOpenClawHttpClient(opts) {
 
     if (code !== 0) {
       const tail = (errText || outText).slice(-4500);
-      throw new Error(`OpenClaw agent 실패 (exit ${code}): ${tail}`);
+      const low = (errText + outText).toLowerCase();
+      const hint =
+        low.includes("gateway agent failed") || low.includes("unknown agent id")
+          ? " | 힌트: 먼저 WebSocket(게이트웨이)이 실패한 경우가 많습니다. `openclaw/.env`의 `OPENCLAW_GATEWAY_TOKEN`·GEMINI/ANTHROPIC 키를 게이트웨이와 동일한지, `docker compose logs openclaw-gateway` 로 확인."
+          : "";
+      throw new Error(`OpenClaw agent 실패 (exit ${code}): ${tail}${hint}`);
     }
 
     try {
@@ -130,6 +170,7 @@ export function createOpenClawHttpClient(opts) {
       throw new Error("runAgent 미구현 — runAgentMessage 사용");
     },
     gatewayUrl,
+    httpBase,
   };
 }
 
@@ -224,6 +265,26 @@ function httpToWs(httpUrl) {
   if (u.startsWith("http://")) return `ws://${u.slice("http://".length)}`;
   if (u.startsWith("https://")) return `wss://${u.slice("https://".length)}`;
   return "";
+}
+
+/**
+ * `fetch(/healthz)` 는 HTTP 기준 주소가 필요하다. `OPENCLAW_BASE_URL` 이 없으면 `OPENCLAW_GATEWAY_URL` 의 ws 를 http 로 바꿔 쓴다.
+ * @param {string | undefined} baseUrl
+ * @param {string} gatewayWsUrl
+ */
+function resolveHttpBaseForHealth(baseUrl, gatewayWsUrl) {
+  const b = (baseUrl || "").trim().replace(/\/$/, "");
+  if (b && /^https?:\/\//i.test(b)) return b;
+  const g = (gatewayWsUrl || "").trim();
+  if (g.startsWith("ws://")) {
+    const host = g.slice("ws://".length).split("/")[0];
+    return `http://${host}`;
+  }
+  if (g.startsWith("wss://")) {
+    const host = g.slice("wss://".length).split("/")[0];
+    return `https://${host}`;
+  }
+  return "http://127.0.0.1:18789";
 }
 
 /**

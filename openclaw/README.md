@@ -136,7 +136,7 @@ docker compose --profile cli run --rm openclaw-cli models status
 
 ### `Unknown agent id "main"` 또는 채팅이 `…OpenClaw 응답 대기…`에서 멈춤
 
-- **정체(`처리 중` 240초·답 없음):** 대부분 **게이트웨이/키/네트워크** 문제다. `OPENCLAW_GATEWAY_TOKEN` 이 **openclaw `.env`와 `discord-bridge/.env`에서 동일**한지, `docker compose ps` 에서 `openclaw-gateway` **healthy** 인지, `docker compose logs -f openclaw-gateway`·`discord-bridge` 로 401/연결 실패/모델 오류를 본다. `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` 등이 컨테이너에 실제로 들어갔는지도 확인한다.
+- **정체(`처리 중` 240초·답 없음):** 대부분 **게이트웨이/키/네트워크** 문제다. `docker compose` 를 **`openclaw/`** 에서 실행할 때 **프로젝트 `.env`는 `openclaw/.env` 하나** — `OPENCLAW_GATEWAY_TOKEN`·`GEMINI_API_KEY` 는 **반드시 여기**에 두는 것이 안전(게이트웨이 `environment`·`discord-bridge` 둘 다 `${...}` 으로 같은 값). `docker compose ps` 로 `openclaw-gateway` **healthy** 인지, `docker compose logs -f` 로 401/연결 실패를 본다. **discord-bridge** 는 요청마다(짧은 캐시) `OPENCLAW_BASE_URL/healthz` 를 먼저 두르며, 여기서 실패하면 240초를 기다리기 전에 바로 티가 난다(버전: discord-bridge 최신).
 
 - **`Unknown agent id "main"`** 은 흔히 로그에 `Gateway agent failed; falling back to embedded` 가 앞에 붙는다. 즉 **게이트웨이에 먼저 실패한 뒤** OpenClaw CLI가 임베드 루트로 갈 때 내부에서 **`main` id**를 쓰는 경우가 있어, `agents.list`에 그 이름이 없으면 터진다.
 
