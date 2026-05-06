@@ -2,32 +2,25 @@
   "agents": {
     "defaults": {
       "workspace": "/home/node/.openclaw/workspace",
+      "sandbox": { "mode": "off" },
       "model": {
-        "primary": "google/gemini-3.1-pro-preview",
-        "fallbacks": [
-          "google/gemini-2.5-pro"
-        ]
+        "primary": "google/gemini-3.1-pro-preview"
       },
-      "models": {
-        "anthropic/claude-opus-4-7": { "alias": "opus" },
-        "anthropic/claude-sonnet-4-6": { "alias": "sonnet" },
-        "google/gemini-3.1-pro-preview": { "alias": "gemini31" },
-        "google/gemini-2.5-pro": { "alias": "gemini25" }
-      }
+      "heartbeat": { "every": "" }
     },
     "list": [
       {
-        "id": "discord-gemini",
+        "id": "kchjang",
+        "workspace": "/home/node/.openclaw/workspace-kchjang",
         "model": {
-          "primary": "google/gemini-3.1-pro-preview",
-          "fallbacks": ["google/gemini-2.5-pro"]
+          "primary": "anthropic/claude-haiku-4-5-20251001"
         }
       },
       {
-        "id": "discord-claude",
+        "id": "kchjang-coding",
+        "workspace": "/home/node/.openclaw/workspace-kchjang",
         "model": {
-          "primary": "anthropic/claude-opus-4-7",
-          "fallbacks": ["anthropic/claude-sonnet-4-6"]
+          "primary": "anthropic/claude-sonnet-4-6"
         }
       }
     ]
@@ -36,29 +29,74 @@
     "mode": "local",
     "auth": {
       "mode": "token",
-      "token": {
-        "source": "env",
-        "provider": "default",
-        "id": "OPENCLAW_GATEWAY_TOKEN"
-      }
+      "token": "REPLACE_WITH_LONG_RANDOM_TOKEN"
     },
     "port": 18789,
     "bind": "lan",
-    "tailscale": { "mode": "off", "resetOnExit": false }
+    "tailscale": { "mode": "off", "resetOnExit": false },
+    "controlUi": {
+      "allowedOrigins": [
+        "http://localhost:18789",
+        "http://127.0.0.1:18789"
+      ]
+    },
+    "channelHealthCheckMinutes": 0
   },
   "session": { "dmScope": "per-channel-peer" },
   "tools": { "profile": "coding" },
   "skills": { "install": { "nodeManager": "npm" } },
-  "plugins": {
-    "entries": {
-      "anthropic": { "enabled": true },
-      "google": { "enabled": true }
+  "channels": {
+    "discord": {
+      "enabled": true,
+      "groupPolicy": "allowlist",
+      "allowBots": "mentions",
+      "guilds": {
+        "YOUR_SERVER_ID": {
+          "tools": {
+            "deny": ["image_generate"]
+          }
+        }
+      },
+      "inboundWorker": { "runTimeoutMs": 1800000 },
+      "accounts": {
+        "default": {
+          "token": "DISCORD_BOT_TOKEN_JEMJJANG",
+          "groupPolicy": "allowlist",
+          "ackReaction": "👀"
+        },
+        "kchjang": {
+          "token": "DISCORD_BOT_TOKEN_KLJJANG",
+          "groupPolicy": "allowlist",
+          "inboundWorker": { "runTimeoutMs": 300000 },
+          "ackReaction": "👀"
+        }
+      }
     }
   },
-  "auth": {
-    "profiles": {
-      "anthropic:default": { "provider": "anthropic", "mode": "api_key" },
-      "google:default": { "provider": "google", "mode": "api_key" }
+  "bindings": [
+    {
+      "match": {
+        "channel": "discord",
+        "accountId": "kchjang",
+        "channelId": "CODING_CHANNEL_ID"
+      },
+      "agentId": "kchjang-coding"
+    },
+    {
+      "match": {
+        "channel": "discord",
+        "accountId": "kchjang"
+      },
+      "agentId": "kchjang"
     }
+  ],
+  "plugins": {
+    "entries": {
+      "google": { "enabled": true },
+      "anthropic": { "enabled": true }
+    }
+  },
+  "messages": {
+    "statusReactions": { "enabled": false }
   }
 }
